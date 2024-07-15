@@ -17,10 +17,7 @@ package org.springframework.data.neo4j.repository.query;
 
 import static org.neo4j.cypherdsl.core.Cypher.property;
 
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.*;
 import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -38,10 +35,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.ScrollPosition.Direction;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.neo4j.core.convert.Neo4jConversionService;
-import org.springframework.data.neo4j.core.mapping.Constants;
-import org.springframework.data.neo4j.core.mapping.Neo4jPersistentEntity;
-import org.springframework.data.neo4j.core.mapping.Neo4jPersistentProperty;
-import org.springframework.data.neo4j.core.mapping.NodeDescription;
+import org.springframework.data.neo4j.core.mapping.*;
 
 /**
  * Bridging between Spring Data domain Objects and Cypher constructs.
@@ -60,59 +54,66 @@ public final class CypherAdapterUtils {
 	 */
 	public static Function<Sort.Order, SortItem> sortAdapterFor(NodeDescription<?> nodeDescription) {
 		return order -> {
-
 			String domainProperty = order.getProperty();
 			boolean propertyIsQualifiedOrComposite = domainProperty.contains(".");
-			SymbolicName root;
-			if (!propertyIsQualifiedOrComposite) {
-				root = Constants.NAME_OF_TYPED_ROOT_NODE.apply(nodeDescription);
-			} else {
-				// need to check first if this is really a qualified name or the "qualifier" is a composite property
-				if (nodeDescription.getGraphProperty(domainProperty.split("\\.")[0]).isEmpty()) {
-					int indexOfSeparator = domainProperty.indexOf(".");
-					root = Cypher.name(domainProperty.substring(0, indexOfSeparator));
-					domainProperty = domainProperty.substring(indexOfSeparator + 1);
-				} else {
-					root = Constants.NAME_OF_TYPED_ROOT_NODE.apply(nodeDescription);
-				}
-			}
+			SymbolicName root = resolveRootSymbolicName(nodeDescription, domainProperty, propertyIsQualifiedOrComposite);
 
-			var optionalGraphProperty = nodeDescription.getGraphProperty(domainProperty);
-			// try to resolve if this is a composite property
-			if (optionalGraphProperty.isEmpty()) {
-				var domainPropertyPrefix = domainProperty.split("\\.")[0];
-				optionalGraphProperty = nodeDescription.getGraphProperty(domainPropertyPrefix);
-			}
-			if (optionalGraphProperty.isEmpty()) {
-				throw new IllegalStateException(String.format("Cannot order by the unknown graph property: '%s'", domainProperty));
-			}
-			var graphProperty = optionalGraphProperty.get();
-			Expression expression;
-			if (graphProperty.isInternalIdProperty()) {
-				// Not using the id expression here, as the root will be referring to the constructed map being returned.
-				expression = property(root, Constants.NAME_OF_INTERNAL_ID);
-			} else if (graphProperty.isComposite() && !domainProperty.contains(".")) {
-				throw new IllegalStateException(String.format("Cannot order by composite property: '%s'. Only ordering by its nested fields is allowed.", domainProperty));
-			} else if (graphProperty.isComposite()) {
-				if (nodeDescription.containsPossibleCircles(rpp -> true)) {
-					expression = property(root, domainProperty);
-				} else {
-					expression = property(root, Constants.NAME_OF_ALL_PROPERTIES, domainProperty);
-				}
-			} else {
-				expression = property(root, graphProperty.getPropertyName());
-				if (order.isIgnoreCase()) {
-					expression = Cypher.toLower(expression);
-				}
-			}
+			GraphPropertyDescription graphProperty = resolveGraphProperty(nodeDescription, domainProperty);
+			Expression expression = buildExpression(root, graphProperty, domainProperty, order, nodeDescription);
+
 			SortItem sortItem = Cypher.sort(expression);
 
-			// Spring's Sort.Order defaults to ascending, so we just need to change this if we have descending order.
 			if (order.isDescending()) {
 				sortItem = sortItem.descending();
 			}
 			return sortItem;
 		};
+	}
+
+	private static SymbolicName resolveRootSymbolicName(NodeDescription<?> nodeDescription, String domainProperty, boolean propertyIsQualifiedOrComposite) {
+		if (!propertyIsQualifiedOrComposite) {
+			return Constants.NAME_OF_TYPED_ROOT_NODE.apply(nodeDescription);
+		} else {
+			String[] parts = domainProperty.split("\\.");
+			if (nodeDescription.getGraphProperty(parts[0]).isEmpty()) {
+				return Cypher.name(parts[0]);
+			} else {
+				return Constants.NAME_OF_TYPED_ROOT_NODE.apply(nodeDescription);
+			}
+		}
+	}
+
+	private static GraphPropertyDescription resolveGraphProperty(NodeDescription<?> nodeDescription, String domainProperty) {
+		var optionalGraphProperty = nodeDescription.getGraphProperty(domainProperty);
+		if (optionalGraphProperty.isEmpty()) {
+			String domainPropertyPrefix = domainProperty.split("\\.")[0];
+			optionalGraphProperty = nodeDescription.getGraphProperty(domainPropertyPrefix);
+		}
+		if (optionalGraphProperty.isEmpty()) {
+			throw new IllegalStateException(String.format("Cannot order by the unknown graph property: '%s'", domainProperty));
+		}
+		return optionalGraphProperty.get();
+	}
+
+	private static Expression buildExpression(SymbolicName root, GraphPropertyDescription graphProperty, String domainProperty, Sort.Order order, NodeDescription<?> nodeDescription) {
+		if (graphProperty.isInternalIdProperty()) {
+			return property(root, Constants.NAME_OF_INTERNAL_ID);
+		} else if (graphProperty.isComposite()) {
+			if (!domainProperty.contains(".")) {
+				throw new IllegalStateException(String.format("Cannot order by composite property: '%s'. Only ordering by its nested fields is allowed.", domainProperty));
+			}
+			if (nodeDescription.containsPossibleCircles(rpp -> true)) {
+				return property(root, domainProperty);
+			} else {
+				return property(root, Constants.NAME_OF_ALL_PROPERTIES, domainProperty);
+			}
+		} else {
+			Expression expression = property(root, graphProperty.getPropertyName());
+			if (order.isIgnoreCase()) {
+				expression = Cypher.toLower(expression);
+			}
+			return expression;
+		}
 	}
 
 	public static Condition combineKeysetIntoCondition(Neo4jPersistentEntity<?> entity, KeysetScrollPosition scrollPosition, Sort sort, Neo4jConversionService conversionService) {
