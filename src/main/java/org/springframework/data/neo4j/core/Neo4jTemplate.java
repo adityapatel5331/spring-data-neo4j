@@ -276,47 +276,122 @@ public final class Neo4jTemplate implements
 		return transactionTemplateReadOnly
 				.execute(tx -> new FluentOperationSupport(this).find(domainType));
 	}
+	public static class QueryBuilder<T, R> {
+		private String cypherQuery;
+		private Map<String, Object> parameters;
+		private Class<T> domainType;
+		private Class<R> resultType;
+		private TemplateSupport.FetchType fetchType;
+		private QueryFragmentsAndParameters queryFragmentsAndParameters;
 
+		public QueryBuilder<T, R> cypherQuery(String cypherQuery) {
+			this.cypherQuery = cypherQuery;
+			return this;
+		}
+
+		public QueryBuilder<T, R> parameters(Map<String, Object> parameters) {
+			this.parameters = parameters;
+			return this;
+		}
+
+		public QueryBuilder<T, R> domainType(Class<T> domainType) {
+			this.domainType = domainType;
+			return this;
+		}
+
+		public QueryBuilder<T, R> resultType(Class<R> resultType) {
+			this.resultType = resultType;
+			return this;
+		}
+
+		public QueryBuilder<T, R> fetchType(TemplateSupport.FetchType fetchType) {
+			this.fetchType = fetchType;
+			return this;
+		}
+
+		public QueryBuilder<T, R> queryFragmentsAndParameters(QueryFragmentsAndParameters queryFragmentsAndParameters) {
+			this.queryFragmentsAndParameters = queryFragmentsAndParameters;
+			return this;
+		}
+
+		public String getCypherQuery() {
+			return cypherQuery;
+		}
+
+		public Map<String, Object> getParameters() {
+			return parameters;
+		}
+
+		public Class<T> getDomainType() {
+			return domainType;
+		}
+
+		public Class<R> getResultType() {
+			return resultType;
+		}
+
+		public TemplateSupport.FetchType getFetchType() {
+			return fetchType;
+		}
+
+		public QueryFragmentsAndParameters getQueryFragmentsAndParameters() {
+			return queryFragmentsAndParameters;
+		}
+	}
 	@SuppressWarnings("unchecked")
-	<T, R> List<R> doFind(@Nullable String cypherQuery, @Nullable Map<String, Object> parameters, Class<T> domainType, Class<R> resultType, TemplateSupport.FetchType fetchType, @Nullable QueryFragmentsAndParameters queryFragmentsAndParameters) {
-
+	public <T, R> List<R> doFind(QueryBuilder<T, R> queryBuilder) {
 		return transactionTemplateReadOnly.execute(tx -> {
 			List<T> intermediaResults = Collections.emptyList();
-			if (cypherQuery == null && queryFragmentsAndParameters == null && fetchType == TemplateSupport.FetchType.ALL) {
-				intermediaResults = doFindAll(domainType, resultType);
+
+			if (shouldFindAll(queryBuilder)) {
+				intermediaResults = doFindAll(queryBuilder.getDomainType(), queryBuilder.getResultType());
 			} else {
-				ExecutableQuery<T> executableQuery;
-				if (queryFragmentsAndParameters == null) {
-					executableQuery = createExecutableQuery(domainType, resultType, cypherQuery,
-							parameters == null ? Collections.emptyMap() : parameters);
-				} else {
-					executableQuery = createExecutableQuery(domainType, resultType, queryFragmentsAndParameters);
-				}
-				intermediaResults = switch (fetchType) {
+				ExecutableQuery<T> executableQuery = createExecutableQuery(queryBuilder);
+				intermediaResults = switch (queryBuilder.getFetchType()) {
 					case ALL -> executableQuery.getResults();
-					case ONE -> executableQuery.getSingleResult().map(Collections::singletonList)
-							.orElseGet(Collections::emptyList);
+					case ONE -> executableQuery.getSingleResult().map(Collections::singletonList).orElse(Collections.emptyList());
 				};
 			}
 
-			if (resultType.isAssignableFrom(domainType)) {
+			if (queryBuilder.getResultType().isAssignableFrom(queryBuilder.getDomainType())) {
 				return (List<R>) intermediaResults;
 			}
 
-			if (resultType.isInterface()) {
+			if (queryBuilder.getResultType().isInterface()) {
 				return intermediaResults.stream()
-						.map(instance -> getProjectionFactory().createProjection(resultType, instance))
+						.map(instance -> getProjectionFactory().createProjection(queryBuilder.getResultType(), instance))
 						.collect(Collectors.toList());
 			}
 
-			DtoInstantiatingConverter converter = new DtoInstantiatingConverter(resultType, neo4jMappingContext);
-			return intermediaResults.stream()
-					.map(EntityInstanceWithSource.class::cast)
-					.map(converter::convert)
-					.map(v -> (R) v)
-					.filter(Objects::nonNull)
-					.collect(Collectors.toList());
+			return convertToDtoList(intermediaResults, queryBuilder.getResultType());
 		});
+	}
+
+	private <T, R> boolean shouldFindAll(QueryBuilder<T, R> queryBuilder) {
+		return queryBuilder.getCypherQuery() == null &&
+				queryBuilder.getQueryFragmentsAndParameters() == null &&
+				queryBuilder.getFetchType() == TemplateSupport.FetchType.ALL;
+	}
+
+	private <T, R> List<R> convertToDtoList(List<T> intermediaResults, Class<R> resultType) {
+		// Implementation for converting results to DTO list
+		DtoInstantiatingConverter converter = new DtoInstantiatingConverter(resultType, neo4jMappingContext);
+		return intermediaResults.stream()
+				.map(EntityInstanceWithSource.class::cast)
+				.map(converter::convert)
+				.filter(Objects::nonNull)
+				.map(v -> (R) v)
+				.collect(Collectors.toList());
+	}
+
+	private <T, R> ExecutableQuery<T> createExecutableQuery(QueryBuilder<T, R> queryBuilder) {
+		if (queryBuilder.getQueryFragmentsAndParameters() == null) {
+			return createExecutableQuery(queryBuilder.getDomainType(), queryBuilder.getResultType(),
+					queryBuilder.getCypherQuery(), queryBuilder.getParameters());
+		} else {
+			return createExecutableQuery(queryBuilder.getDomainType(), queryBuilder.getResultType(),
+					queryBuilder.getQueryFragmentsAndParameters());
+		}
 	}
 
 	@Override

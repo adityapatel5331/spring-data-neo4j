@@ -116,8 +116,18 @@ final class FluentOperationSupport implements FluentFindOperation, FluentSaveOpe
 		}
 
 		private List<T> doFind(TemplateSupport.FetchType fetchType) {
-			return template.doFind(query, parameters, domainType, returnType, fetchType, queryFragmentsAndParameters);
+			// Assuming query, parameters, domainType, returnType, and queryFragmentsAndParameters are instance variables or accessible in this context
+			Neo4jTemplate.QueryBuilder<T, T> queryBuilder = new Neo4jTemplate.QueryBuilder<T, T>()
+					.cypherQuery(query)
+					.parameters(parameters)
+					.domainType((Class<T>) domainType)
+					.resultType(returnType)
+					.fetchType(fetchType)
+					.queryFragmentsAndParameters(queryFragmentsAndParameters);
+
+			return template.doFind(queryBuilder);
 		}
+
 	}
 
 	@Override
