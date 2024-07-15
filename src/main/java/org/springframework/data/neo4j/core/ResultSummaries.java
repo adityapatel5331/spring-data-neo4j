@@ -1,24 +1,10 @@
-/*
- * Copyright 2011-2024 the original author or authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
 package org.springframework.data.neo4j.core;
 
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.neo4j.driver.NotificationCategory;
 import org.neo4j.driver.summary.InputPosition;
@@ -26,6 +12,8 @@ import org.neo4j.driver.summary.Notification;
 import org.neo4j.driver.summary.Plan;
 import org.neo4j.driver.summary.ResultSummary;
 import org.springframework.core.log.LogAccessor;
+
+import static org.neo4j.driver.NotificationCategory.*;
 
 /**
  * Utility class for dealing with result summaries.
@@ -37,17 +25,20 @@ import org.springframework.core.log.LogAccessor;
 final class ResultSummaries {
 
 	private static final String LINE_SEPARATOR = System.lineSeparator();
-	private static final LogAccessor cypherPerformanceNotificationLog = new LogAccessor(LogFactory.getLog("org.springframework.data.neo4j.cypher.performance"));
-	private static final LogAccessor cypherHintNotificationLog = new LogAccessor(LogFactory.getLog("org.springframework.data.neo4j.cypher.hint"));
-	private static final LogAccessor cypherUnrecognizedNotificationLog = new LogAccessor(LogFactory.getLog("org.springframework.data.neo4j.cypher.unrecognized"));
-	private static final LogAccessor cypherUnsupportedNotificationLog = new LogAccessor(LogFactory.getLog("org.springframework.data.neo4j.cypher.unsupported"));
-	private static final LogAccessor cypherDeprecationNotificationLog = new LogAccessor(LogFactory.getLog("org.springframework.data.neo4j.cypher.deprecation"));
-	private static final LogAccessor cypherGenericNotificationLog = new LogAccessor(LogFactory.getLog("org.springframework.data.neo4j.cypher.generic"));
-	private static final LogAccessor cypherSecurityNotificationLog = new LogAccessor(LogFactory.getLog("org.springframework.data.neo4j.cypher.security"));
-	private static final LogAccessor cypherTopologyNotificationLog = new LogAccessor(LogFactory.getLog("org.springframework.data.neo4j.cypher.topology"));
+
+	private static final LogAccessor cypherLog = new LogAccessor(LogFactory.getLog("org.springframework.data.neo4j.cypher"));
+
+	private static final LogAccessor cypherPerformanceNotificationLog = getLogAccessor("org.springframework.data.neo4j.cypher.performance");
+	private static final LogAccessor cypherHintNotificationLog = getLogAccessor("org.springframework.data.neo4j.cypher.hint");
+	private static final LogAccessor cypherUnrecognizedNotificationLog = getLogAccessor("org.springframework.data.neo4j.cypher.unrecognized");
+	private static final LogAccessor cypherUnsupportedNotificationLog = getLogAccessor("org.springframework.data.neo4j.cypher.unsupported");
+	private static final LogAccessor cypherDeprecationNotificationLog = getLogAccessor("org.springframework.data.neo4j.cypher.deprecation");
+	private static final LogAccessor cypherGenericNotificationLog = getLogAccessor("org.springframework.data.neo4j.cypher.generic");
+	private static final LogAccessor cypherSecurityNotificationLog = getLogAccessor("org.springframework.data.neo4j.cypher.security");
+	private static final LogAccessor cypherTopologyNotificationLog = getLogAccessor("org.springframework.data.neo4j.cypher.topology");
 
 	/**
-	 * Does some post-processing on the giving result summary, especially logging all notifications
+	 * Does some post-processing on the given result summary, especially logging all notifications
 	 * and potentially query plans.
 	 *
 	 * @param resultSummary The result summary to process
@@ -60,53 +51,49 @@ final class ResultSummaries {
 	}
 
 	private static void logNotifications(ResultSummary resultSummary) {
-
-		if (resultSummary.notifications().isEmpty() || !Neo4jClient.cypherLog.isWarnEnabled()) {
+		if (!cypherLog.isWarnEnabled() || resultSummary.notifications().isEmpty()) {
 			return;
 		}
 
 		String query = resultSummary.query().text();
-		resultSummary.notifications()
-				.forEach(notification -> {
-					LogAccessor log = notification.category()
-							.map(ResultSummaries::getLogAccessor)
-							.orElse(Neo4jClient.cypherLog);
-					Consumer<String> logFunction =
-							switch (notification.severity()) {
-								case "WARNING" -> log::warn;
-								case "INFORMATION" -> log::info;
-								default -> log::debug;
-							};
-					logFunction.accept(ResultSummaries.format(notification, query));
-				});
+		resultSummary.notifications().forEach(notification -> {
+			LogAccessor log = getLogAccessor(notification.category().orElse(null));
+			Consumer<String> logFunction = getLogFunction(notification.severity());
+			logFunction.accept(format(notification, query));
+		});
+	}
+
+	private static Consumer<String> getLogFunction(String severity) {
+		switch (severity) {
+			case "WARNING":
+				return cypherLog::warn;
+			case "INFORMATION":
+				return cypherLog::info;
+			default:
+				return cypherLog::debug;
+		}
 	}
 
 	private static LogAccessor getLogAccessor(NotificationCategory category) {
-		if (category == NotificationCategory.HINT) {
+
+		if (category.equals(HINT)) {
 			return cypherHintNotificationLog;
-		}
-		if (category == NotificationCategory.DEPRECATION) {
+		} else if (category.equals(DEPRECATION)) {
 			return cypherDeprecationNotificationLog;
-		}
-		if (category == NotificationCategory.PERFORMANCE) {
+		} else if (category.equals(PERFORMANCE)) {
 			return cypherPerformanceNotificationLog;
-		}
-		if (category == NotificationCategory.GENERIC) {
+		} else if (category.equals(GENERIC)) {
 			return cypherGenericNotificationLog;
-		}
-		if (category == NotificationCategory.UNSUPPORTED) {
+		} else if (category.equals(UNSUPPORTED)) {
 			return cypherUnsupportedNotificationLog;
-		}
-		if (category == NotificationCategory.UNRECOGNIZED) {
+		} else if (category.equals(UNRECOGNIZED)) {
 			return cypherUnrecognizedNotificationLog;
-		}
-		if (category == NotificationCategory.SECURITY) {
+		} else if (category.equals(SECURITY)) {
 			return cypherSecurityNotificationLog;
-		}
-		if (category == NotificationCategory.TOPOLOGY) {
+		} else if (category.equals(TOPOLOGY)) {
 			return cypherTopologyNotificationLog;
 		}
-		return Neo4jClient.cypherLog;
+		return cypherLog;
 	}
 
 	/**
@@ -116,8 +103,7 @@ final class ResultSummaries {
 	 * @param forQuery     The query that caused the notification
 	 * @return A formatted string
 	 */
-	static String format(Notification notification, String forQuery) {
-
+	private static String format(Notification notification, String forQuery) {
 		InputPosition position = notification.position();
 		boolean hasPosition = position != null;
 
@@ -141,19 +127,16 @@ final class ResultSummaries {
 	 * @param resultSummary The result summary that might contain a plan
 	 */
 	private static void logPlan(ResultSummary resultSummary) {
-
-		if (!(resultSummary.hasPlan() && Neo4jClient.cypherLog.isDebugEnabled())) {
+		if (!resultSummary.hasPlan() || !cypherLog.isDebugEnabled()) {
 			return;
 		}
 
-		Consumer<String> log = Neo4jClient.cypherLog::debug;
-
+		Consumer<String> log = cypherLog::debug;
 		log.accept("Plan:");
 		printPlan(log, resultSummary.plan(), 0);
 	}
 
 	private static void printPlan(Consumer<String> log, Plan plan, int level) {
-
 		String tabs = Stream.generate(() -> "\t").limit(level).collect(Collectors.joining());
 		log.accept(tabs + "operatorType: " + plan.operatorType());
 		log.accept(tabs + "identifiers: " + String.join(",", plan.identifiers()));
@@ -161,10 +144,12 @@ final class ResultSummaries {
 		plan.arguments().forEach((k, v) -> log.accept(tabs + "\t" + k + "=" + v));
 		if (!plan.children().isEmpty()) {
 			log.accept(tabs + "children: ");
-			for (Plan childPlan : plan.children()) {
-				printPlan(log, childPlan, level + 1);
-			}
+			plan.children().forEach(childPlan -> printPlan(log, childPlan, level + 1));
 		}
+	}
+
+	private static LogAccessor getLogAccessor(String name) {
+		return new LogAccessor(LogFactory.getLog(name));
 	}
 
 	private ResultSummaries() {
