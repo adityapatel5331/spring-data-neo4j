@@ -61,7 +61,7 @@ class PartValidator {
 		COMPARABLE_TEMPORAL_TYPES = Collections.unmodifiableSet(hlp);
 	}
 
-	private static final EnumSet<Part.Type> TYPES_SUPPORTING_CASE_INSENSITIVITY = EnumSet.of(Part.Type.CONTAINING,
+	private static final EnumSet<Part.Type> SUPPORT_CASE_INSENSITIVITY = EnumSet.of(Part.Type.CONTAINING,
 			Part.Type.ENDING_WITH, Part.Type.LIKE, Part.Type.NEGATING_SIMPLE_PROPERTY, Part.Type.NOT_CONTAINING,
 			Part.Type.NOT_LIKE, Part.Type.SIMPLE_PROPERTY, Part.Type.STARTING_WITH);
 
@@ -101,7 +101,7 @@ class PartValidator {
 
 		Assert.isTrue(part.shouldIgnoreCase() != Part.IgnoreCaseType.ALWAYS || canIgnoreCase(part), () -> String.format(
 				"Can not derive query for '%s': Only the case of String based properties can be ignored within the following keywords: %s",
-				queryMethod, formatTypes(TYPES_SUPPORTING_CASE_INSENSITIVITY)));
+				queryMethod, formatTypes(SUPPORT_CASE_INSENSITIVITY)));
 	}
 
 	private void validateTemporalProperty(Part part) {
@@ -139,6 +139,6 @@ class PartValidator {
 	 */
 	static boolean canIgnoreCase(Part part) {
 		return part.getProperty().getLeafType() == String.class
-				&& TYPES_SUPPORTING_CASE_INSENSITIVITY.contains(part.getType());
+				&& SUPPORT_CASE_INSENSITIVITY.contains(part.getType());
 	}
 }
