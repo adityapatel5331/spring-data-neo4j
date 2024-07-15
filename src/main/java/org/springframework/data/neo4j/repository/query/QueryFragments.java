@@ -1,48 +1,21 @@
-/*
- * Copyright 2011-2024 the original author or authors.
- *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      https://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
 package org.springframework.data.neo4j.repository.query;
+
+import org.apiguardian.api.API;
+import org.neo4j.cypherdsl.core.*;
+import org.springframework.data.neo4j.core.mapping.PropertyFilter;
+import org.springframework.data.neo4j.core.mapping.NodeDescription;
+import org.springframework.lang.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
-
-import org.apiguardian.api.API;
-import org.neo4j.cypherdsl.core.Condition;
-import org.neo4j.cypherdsl.core.Cypher;
-import org.neo4j.cypherdsl.core.Expression;
-import org.neo4j.cypherdsl.core.PatternElement;
-import org.neo4j.cypherdsl.core.SortItem;
-import org.neo4j.cypherdsl.core.Statement;
-import org.neo4j.cypherdsl.core.StatementBuilder;
-import org.springframework.data.neo4j.core.mapping.CypherGenerator;
-import org.springframework.data.neo4j.core.mapping.Neo4jPersistentProperty;
-import org.springframework.data.neo4j.core.mapping.PropertyFilter;
-import org.springframework.data.neo4j.core.mapping.Neo4jPersistentEntity;
-import org.springframework.data.neo4j.core.mapping.NodeDescription;
-import org.springframework.data.neo4j.core.schema.Property;
-import org.springframework.lang.Nullable;
 
 /**
  * Collects the parts of a Cypher query to be handed over to the Cypher generator.
  *
- * @author Gerrit Meier
  * @since 6.0.4
  */
 @API(status = API.Status.INTERNAL, since = "6.0.4")
@@ -76,7 +49,7 @@ public final class QueryFragments {
 	}
 
 	public void setCondition(@Nullable Condition condition) {
-		this.condition = Optional.ofNullable(condition).orElse(Cypher.noCondition());
+		this.condition = Optional.ofNullable(condition).orElse(org.neo4j.cypherdsl.core.Cypher.noCondition());
 	}
 
 	public Condition getCondition() {
@@ -118,7 +91,7 @@ public final class QueryFragments {
 	}
 
 	public void setReturnBasedOn(NodeDescription<?> nodeDescription, Collection<PropertyFilter.ProjectedPath> includedProperties,
-			boolean isDistinct) {
+								 boolean isDistinct) {
 		this.returnTuple = new ReturnTuple(nodeDescription, includedProperties, isDistinct);
 	}
 
@@ -139,75 +112,23 @@ public final class QueryFragments {
 	}
 
 	public Statement toStatement() {
-
-		StatementBuilder.OngoingReadingWithoutWhere match = null;
-
-		for (PatternElement patternElement : matchOn) {
-			if (match == null) {
-				match = Cypher.match(matchOn.get(0));
-			} else {
-				match = match.match(patternElement);
-			}
-		}
-
-		StatementBuilder.OngoingReadingWithWhere matchWithWhere = match.where(condition);
-
-		if (deleteExpression != null) {
-			matchWithWhere = (StatementBuilder.OngoingReadingWithWhere) matchWithWhere.detachDelete(deleteExpression);
-		}
-
-		StatementBuilder.OngoingReadingAndReturn returnPart = isDistinctReturn()
-				? matchWithWhere.returningDistinct(getReturnExpressions())
-				: matchWithWhere.returning(getReturnExpressions());
-
-		Statement statement = returnPart
-				.orderBy(getOrderBy())
-				.skip(skip)
-				.limit(limit).build();
-
-		statement.setRenderConstantsAsParameters(renderConstantsAsParameters);
-		return statement;
+		return new StatementBuilderHelper(this).toStatement();
 	}
 
-	private Collection<Expression> getReturnExpressions() {
-		return returnExpressions.size() > 0
-				? returnExpressions
-				: CypherGenerator.INSTANCE.createReturnStatementForMatch((Neo4jPersistentEntity<?>) returnTuple.nodeDescription,
-				this::includeField);
+	public Collection<Expression> getReturnExpressions() {
+		return returnExpressions;
 	}
 
-	private boolean isDistinctReturn() {
-		return returnExpressions.isEmpty() && returnTuple.isDistinct;
+	public ReturnTuple getReturnTuple() {
+		return returnTuple;
+	}
+
+	public Expression getDeleteExpression() {
+		return deleteExpression;
 	}
 
 	public Collection<SortItem> getOrderBy() {
-
-		if (orderBy == null) {
-			return List.of();
-		} else if (!requiresReverseSort) {
-			return orderBy;
-		} else {
-			return orderBy.stream().map(QueryFragments::reverse).toList();
-		}
-	}
-
-	// Yeah, would be kinda nice having a simple method in Cypher-DSL ;)
-	private static SortItem reverse(SortItem sortItem) {
-
-		var sortedExpression = new AtomicReference<Expression>();
-		var sortDirection = new AtomicReference<SortItem.Direction>();
-
-		sortItem.accept(segment -> {
-			if (segment instanceof SortItem.Direction direction) {
-				sortDirection.compareAndSet(null, direction == SortItem.Direction.UNDEFINED || direction == SortItem.Direction.ASC ? SortItem.Direction.DESC : SortItem.Direction.ASC);
-			} else if (segment instanceof Expression expression) {
-				sortedExpression.compareAndSet(null, expression);
-			}
-		});
-
-		// Default might not explicitly set.
-		sortDirection.compareAndSet(null, SortItem.Direction.DESC);
-		return Cypher.sort(sortedExpression.get(), sortDirection.get());
+		return orderBy;
 	}
 
 	public Number getLimit() {
@@ -218,28 +139,7 @@ public final class QueryFragments {
 		return skip;
 	}
 
-	/**
-	 * Describes which fields of an entity needs to get returned.
-	 */
-	final static class ReturnTuple {
-		final NodeDescription<?> nodeDescription;
-		final PropertyFilter filteredProperties;
-		final boolean isDistinct;
-
-		private ReturnTuple(NodeDescription<?> nodeDescription, Collection<PropertyFilter.ProjectedPath> filteredProperties, boolean isDistinct) {
-			this.nodeDescription = nodeDescription;
-			this.filteredProperties = PropertyFilter.from(filteredProperties, nodeDescription);
-			this.isDistinct = isDistinct;
-		}
-
-		boolean include(PropertyFilter.RelaxedPropertyPath fieldName) {
-			String dotPath = nodeDescription.getGraphProperty(fieldName.getSegment())
-					.filter(Neo4jPersistentProperty.class::isInstance)
-					.map(Neo4jPersistentProperty.class::cast)
-					.filter(p -> p.findAnnotation(Property.class) != null)
-					.map(p -> fieldName.toDotPath(p.getPropertyName()))
-					.orElseGet(fieldName::toDotPath);
-			return this.filteredProperties.contains(dotPath, fieldName.getType());
-		}
+	public boolean isRenderConstantsAsParameters() {
+		return renderConstantsAsParameters;
 	}
 }
